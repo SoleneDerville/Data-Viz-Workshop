@@ -1,0 +1,278 @@
+---
+title: 'American Fisheries Society OR chapter Annual Meeting - data visualization workshop - 2023'
+author: "Solene Derville - solene.derville@oregonstate.edu"
+date: "Feb 28, 2023"
+output:
+  html_document: default
+  pdf_document: default
+subtitle: 'Data visualization with R and beyond: tips and tricks to publish and communicate your science'
+---
+
+### Load R libraries
+
+```{r, echo=T, result="hide", include=T}
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(raster)
+library(ggridges)
+library(ggthemes)
+library(ggrepel)
+library(ggforce)
+```
+
+### Load dataset 
+
+Extracted from GBIF: GBIF.org (09 May 2021) GBIF Occurrence Download https://doi.org/10.15468/dl.frb56w 
+This file contains all GBIF occurrences of the Felidae family collected in Oregon (approximated by a box of longitude [-128.6, -119.3] and latitude [41.1, 46.2]), from 1900 to present (filtering out occurrences with uncertain coordinates)
+
+```{r}
+# import the csv in R into a dataframe. The .csv file needs to be in your working directory for this to work
+# to change working directory, click on > Session > Set Working Directory > Choose Working Directory
+dfel <- read.csv("dataset1_GBIF_observations.csv", sep = ";")
+
+# this dataset has many columns, some of which are not necessary here so let's simplify the dataframe by selecting specific columns
+dfel <- dfel %>% 
+  dplyr::select(gbifID, family, genus, species, individualCount, decimalLatitude, decimalLongitude, eventDate, month, year, institutionCode)
+```
+
+Extracting the elevation at the position where Felidae species were observed
+```{r}
+# elevation downloaded from GEBCO
+# this object is in raster format
+r <- raster("dataset2_gebco_map.tif")
+
+# extract elevation and add it as a column in your dataframe d
+dfel$elev <- raster::extract(r, dfel[c("decimalLongitude", "decimalLatitude")])
+
+# for the purpose of these exercises, let's simply remove the observations for which elevation was not extracted
+# there are couple observations with elev < 0 that don't make sense, let's set this to 0
+dfel <- dfel %>% 
+  filter(!is.na(elev)) %>% 
+  mutate(elev = ifelse(elev < 0, 0, elev))
+```
+
+# Practical 1: understanding ggplot
+
+```{r}
+# set up the plot. No layers are added at this stage
+ggplot(dfel, aes(x = species, y = elev))
+
+# add a layer, for example, a boxplot showing the distribution of elevations by species
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot()
+  
+# color code species, either using fill (inside of the layers) or col (contour of the layers)
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(fill = species))
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species))
+# note that if you try to specify col outside the aes() it doesn't work...
+#ggplot(dfel, aes(x = species, y = elev)) +
+  #geom_boxplot(col = species)
+# unless the color is fixed and doesn't depend on a variable
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(col = "royalblue")
+
+# now let's tweak the color scale and the axis scales
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Felidae Species") +
+  scale_color_canva(palette = "Playful greens and blues")
+
+# you can create a fixed theme to use for all plots
+# set my personal theme
+mytheme <- theme(panel.border = element_rect(linewidth=0.5,color="black", fill="transparent"), #white background
+        panel.background = element_rect(fill = 'white'),
+        text=element_text(face="bold", size=8), #general size for all text.looks small here but ok once using ggsave with 600 dpi and default pointsize
+        title = element_text(size=rel(1.2))) # all titles will be a little larger than labels 
+
+# and add it to the ggplot
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Felidae Species") +
+  scale_color_canva(palette = "Playful greens and blues") +
+  mytheme
+
+# the legend is redundant with the x-axis labels so we can remove it with guide = "none"
+ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Felidae Species") +
+  scale_color_canva(palette = "Playful greens and blues", guide = "none") +
+  mytheme
+```
+
+
+# Practical 2: patchwork
+
+The patchwork package has a very simple syntax to make multi-panel plots and annotate them. In the following example, we will make three different plots and combine them into one figure.
+
+```{r}
+# run these lines of code to create three different plots.
+g1 <- ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Felidae Species")
+g1
+
+g2 <- ggplot(dfel, aes(x = decimalLongitude, y = species)) +
+  # density_ridges are an alternative to boxplots
+  geom_density_ridges(aes(fill = species, col = species), alpha = 0.8, scale = 0.9) +
+  scale_y_discrete("Felidae Species") +
+  # use parse to make the lat and long labels look good
+  scale_x_continuous("Longitude", breaks = seq(-125, -119, 1),
+                   labels = parse(text=paste0(seq(125, 119, -1),"^o", "*W")))
+g2
+
+g3 <- ggplot(dfel[!is.na(dfel$month),], aes(x = as.factor(month), y = elev)) +
+  geom_point(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Month")
+g3
+```
+
+Now let's use patchwork to combine the plots together (ignore warnings, there are due to NAs in the dataset)
+```{r}
+# combine plots 
+g <- (g1 / (g2 | g3)) # the | codes for horizontal alignment and the \ codes for vertical alignment
+g
+
+# now let's set up scales and themes for all panels at the same time using the "&" sign
+g <- (g1 / (g2 | g3)) &
+  scale_color_canva(guide ="none", palette = "Playful greens and blues") &
+  scale_fill_canva(palette = "Playful greens and blues") & 
+  mytheme
+g
+
+# label panels: a), b), c)
+g <- (g1 / (g2 | g3)) &
+  scale_color_canva(guide ="none", palette = "Playful greens and blues") &
+  scale_fill_canva(palette = "Playful greens and blues") & 
+  mytheme &
+  plot_annotation(tag_levels = "A", tag_suffix = ")")
+g
+
+# move legend to the bottom
+g <- (g1 / (g2 | g3)) +
+  plot_layout(guides = "collect") &
+  scale_color_canva(guide ="none", palette = "Playful greens and blues") &
+  scale_fill_canva(palette = "Playful greens and blues") & 
+  mytheme &
+  plot_annotation(tag_levels = "a", tag_suffix = ")") &
+  theme(legend.position = "bottom")
+g
+```
+
+## Practical 3: ggforce and ggrepel
+
+Using ggrepel to annotate elements of the plot with text
+```{r}
+# back to the last plot we made in the last exercise
+ggplot(dfel[!is.na(dfel$month),], aes(x = as.factor(month), y = elev)) +
+  geom_point(aes(col = species)) +
+  scale_y_continuous("Elevation (m)") +
+  scale_x_discrete("Month")
+
+
+# the purpose of this plot is to check if there is a pattern in elevation as a function of season
+# there are clearly two outliers showing elevation > 2250 m. Let's use ggrepel to annotate those points on the plot
+# for example, we could label those points with the name of the source that provided the record and the year of the record
+ggplot(subset(dfel, !is.na(dfel$month)), aes(x = as.factor(month), y = elev)) +
+  geom_point(aes(col = species)) +
+  scale_y_continuous("Elevation (m)") +
+  scale_x_discrete("Month") +
+  geom_text_repel(data = subset(dfel, elev > 2250 & !is.na(dfel$month)), 
+                  aes(label = paste(institutionCode, year),
+                      col = species), 
+                  box.padding = 0.8, max.overlaps = Inf)
+
+# run it several times, the plot will change
+```
+
+Using ggforce to draw ellipses, rectangles, circles etc around elements of the plot
+```{r}
+# make a very basic plot of longitude and latitude of puma observations colored by elevation
+dfel_g3 <- dfel %>% 
+  filter(!is.na(dfel$month) & species == 'Puma concolor')
+g3 <- ggplot(data = dfel_g3,
+       aes(decimalLongitude, decimalLatitude)) +
+    geom_point(aes(col = elev)) +
+    xlab("Longitude") +
+    ylab("Latitude") +
+    coord_fixed()
+g3
+
+# now let's circle observations made at high altitude
+# the geom_mark_ellipse function has a convenient "filter" argument to select just a subset of the data, here the records at elevation > 1500 m
+g3 + geom_mark_rect(aes(filter = elev > 1500))
+
+# complement the function to add label these points
+# the dataframe needs to hold the labels and descriptions into a column
+dfel_g3 <- dfel_g3 %>% 
+  mutate(desc = ifelse(elev > 1500, "Alt > 1500 m", ""))
+
+#Observations in Oregon at high altitude > 1500 m
+ggplot(data = dfel_g3,
+       aes(decimalLongitude, decimalLatitude)) +
+    geom_point(aes(col = elev)) +
+    xlab("Longitude") +
+    ylab("Latitude") +
+    coord_fixed() +
+    geom_mark_ellipse(aes(filter = elev > 1500,
+                           label = species,
+                           description = desc))
+# it is possible that the label of the ellipse will not plot properly if your plot window is too small
+# if that is the case, click on "zoom" in your plot panel
+```
+
+
+# Practical 4: adding stats
+
+
+```{r}
+# make that first plot again and store it in object g_final
+g4 <- ggplot(dfel, aes(x = species, y = elev)) +
+  geom_boxplot(aes(col = species)) +
+  scale_y_continuous("Elevation (m)", limits = c(0, 5000)) +
+  scale_x_discrete("Felidae Species") +
+  scale_color_canva(palette = "Playful greens and blues", guide = "none") +
+  mytheme
+g4
+
+# the data does not seem to follow a normal distribution so we will use a kruskal wallis test to compare elevation across species
+# set levels of comparison for kruskal wallis test  
+my_comparisons <- list( c("Felis catus", "Lynx rufus"), c("Lynx rufus", "Puma concolor"), c("Felis catus", "Puma concolor"))
+
+g4 <- g4 +
+  stat_compare_means(comparisons = my_comparisons, 
+                     label.y = c(2000, 2800, 3500), # specify where on the plot you want the test results to appear
+                     label = "p.signif", 
+                     p.adjust.method = "none") + # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 4500)    # Add global p-value
+g4
+```
+
+# Practical 5: saving
+
+
+Save in different formats, files types and resolutions
+```{r}
+# save in a low resolution jpeg, then zoom on the image, it should be very pixelized
+ggsave(g4, file = "myfigure_badresolution.jpeg", width = 88*2, height = 88*2, dpi = 90, units = "mm")
+
+# save in a high resolution tiff, full page width format
+ggsave(g4, file = "myfigure_highquality.tiff", width = 88*2, height = 88*2, dpi = 600, units = "mm")
+
+# save in a vector image format: pdf. No resolution in dpi is required
+ggsave(g4, file = "myfigure_highquality_vector.pdf", width = 88*2, height = 88*2, units = "mm")
+# you can zoom as much as you want and the lines remain very clear. 
+# also, compared to tiff, the file is much much smaller!
+
+# save as png with a transparent background
+ggsave(g4, file = "myfigure_highquality_transparent.png", width = 88*2, height = 88*2, dpi = 600, units = "mm", bg = "transparent")
+```
+
+
